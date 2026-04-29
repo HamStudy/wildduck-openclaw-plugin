@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { AccountConfig, Permission, PluginConfig, ResolvedAccount, ResolvedConfig, SecretInput } from "./types.js";
 
 declare const process: { env: Record<string, string | undefined> };
@@ -111,6 +112,9 @@ function resolveSecret(secret: SecretInput | undefined, env: Env): string | unde
   }
   if (secret.source === "env") {
     return env[secret.id];
+  }
+  if (secret.source === "file") {
+    return readFileSync(secret.id, "utf8").trim();
   }
   throw new Error(`Unsupported WildDuck SecretRef source for runtime resolution: ${secret.source}`);
 }
