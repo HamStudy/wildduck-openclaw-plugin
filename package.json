@@ -1,0 +1,52 @@
+{
+  "name": "@hamstudy/wildduck-openclaw-plugin",
+  "version": "0.1.0",
+  "description": "Permissioned WildDuck REST email tools and update watcher for OpenClaw",
+  "type": "module",
+  "main": "./src/index.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HamStudy/wildduck-openclaw-plugin.git"
+  },
+  "files": [
+    "src/**/*.ts",
+    "openclaw.plugin.json",
+    "skills/**"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck",
+    "test": "node --test test/*.test.mjs"
+  },
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "wildduck",
+    "email"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "openclaw": ">=2026.3.24-beta.2"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "openclaw": "2026.3.24-beta.2",
+    "typescript": "^5.8.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    },
+    "build": {
+      "openclawVersion": "2026.3.24-beta.2",
+      "pluginSdkVersion": "2026.3.24-beta.2"
+    }
+  }
+}

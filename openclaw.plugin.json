@@ -1,0 +1,136 @@
+{
+  "id": "wildduck",
+  "name": "WildDuck",
+  "description": "Adds permissioned WildDuck REST email tools, thread-aware search, drafts, and debounced update events to OpenClaw.",
+  "version": "0.1.0",
+  "skills": [
+    "skills/wildduck-email"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiUrl": {
+        "type": "string",
+        "description": "WildDuck API base URL, without trailing slash."
+      },
+      "accessToken": {
+        "description": "WildDuck access token or SecretRef. Prefer env SecretRefs or accessTokenEnv over plaintext.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source",
+              "id"
+            ],
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "env",
+                  "file",
+                  "exec"
+                ]
+              },
+              "provider": {
+                "type": "string",
+                "default": "default"
+              },
+              "id": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "accessTokenEnv": {
+        "type": "string",
+        "default": "WILDDUCK_ACCESS_TOKEN",
+        "description": "Environment variable containing the WildDuck access token."
+      },
+      "defaultUserId": {
+        "type": "string",
+        "description": "Default WildDuck user id for tools when userId is omitted."
+      },
+      "permissions": {
+        "type": "array",
+        "default": [
+          "read"
+        ],
+        "items": {
+          "type": "string",
+          "enum": [
+            "read",
+            "draft",
+            "send",
+            "mutate",
+            "filters",
+            "admin",
+            "watch"
+          ]
+        },
+        "description": "Enabled capability groups. Defaults to read-only."
+      },
+      "watch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sse",
+              "poll"
+            ],
+            "default": "sse"
+          },
+          "users": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "WildDuck user ids to watch for update events."
+          },
+          "debounceMs": {
+            "type": "number",
+            "default": 90000
+          },
+          "pollIntervalMs": {
+            "type": "number",
+            "default": 60000
+          },
+          "maxBufferedEvents": {
+            "type": "number",
+            "default": 200
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "apiUrl": {
+      "label": "WildDuck API URL",
+      "placeholder": "https://mail.example.com/api"
+    },
+    "accessToken": {
+      "label": "WildDuck access token",
+      "sensitive": true
+    },
+    "accessTokenEnv": {
+      "label": "Access token environment variable"
+    },
+    "defaultUserId": {
+      "label": "Default user id"
+    },
+    "permissions": {
+      "label": "Enabled permissions"
+    }
+  }
+}
