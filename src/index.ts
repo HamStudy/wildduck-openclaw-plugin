@@ -639,6 +639,8 @@ function createRuntime(rawConfig: PluginConfig): Runtime {
       clients.set(cacheKey, new WildDuckClient({
         apiUrl: account?.apiUrl ?? config.apiUrl,
         accessToken: account?.accessToken ?? config.accessToken,
+        username: account?.username,
+        password: account?.password,
       }));
     }
     return clients.get(cacheKey)!;

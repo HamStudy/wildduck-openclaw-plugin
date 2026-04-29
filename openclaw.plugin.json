@@ -185,6 +185,46 @@
               "type": "string",
               "description": "Environment variable for this account's access token."
             },
+            "username": {
+              "type": "string",
+              "description": "Username for authentication with the WildDuck server."
+            },
+            "password": {
+              "description": "Password for authentication with the WildDuck server.",
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "source",
+                    "id"
+                  ],
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "env",
+                        "file",
+                        "exec"
+                      ]
+                    },
+                    "provider": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            },
+            "passwordEnv": {
+              "type": "string",
+              "description": "Environment variable for this account's password."
+            },
             "watch": {
               "type": "object",
               "additionalProperties": false,

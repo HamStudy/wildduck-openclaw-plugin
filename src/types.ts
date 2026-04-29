@@ -23,6 +23,9 @@ export type AccountConfig = {
   apiUrl?: string;
   accessToken?: SecretInput;
   accessTokenEnv?: string;
+  username?: string;
+  password?: SecretInput;
+  passwordEnv?: string;
   watch?: WatchConfig;
 };
 
@@ -43,6 +46,8 @@ export type ResolvedAccount = {
   permissions: Set<Permission>;
   apiUrl: string;
   accessToken: string;
+  username?: string;
+  password?: string;
   watch: Required<Omit<WatchConfig, "users">> & { users: string[] };
 };
 

@@ -41,11 +41,17 @@ export function resolveConfig(raw: unknown, env: Env = process.env): ResolvedCon
     const accountPermissions = account.permissions?.length ? new Set(account.permissions) : new Set(globalPermissions);
     const accountWatch = account.watch ? normalizeWatch(account.watch) : globalWatch;
 
+    // Resolve account credentials
+    const accountUsername = account.username;
+    const accountPassword = resolveSecret(account.password, env) ?? env[account.passwordEnv ?? ""];
+
     accounts.set(accountId, {
       userId: account.userId,
       permissions: accountPermissions,
       apiUrl: accountApiUrl,
       accessToken: accountAccessToken,
+      username: accountUsername,
+      password: accountPassword,
       watch: accountWatch,
     });
   }

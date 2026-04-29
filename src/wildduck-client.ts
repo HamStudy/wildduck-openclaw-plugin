@@ -90,17 +90,26 @@ export type CreateFilterInput = {
 type ClientOptions = {
   apiUrl: string;
   accessToken: string;
+  username?: string;
+  password?: string;
   fetchImpl?: typeof fetch;
 };
 
 export class WildDuckClient {
   private readonly apiUrl: string;
-  private readonly accessToken: string;
+  private accessToken: string;
+  private readonly initialAccessToken: string;
+  private readonly username?: string;
+  private readonly password?: string;
   private readonly fetchImpl: typeof fetch;
+  private authPromise?: Promise<string>;
 
   constructor(options: ClientOptions) {
     this.apiUrl = options.apiUrl;
     this.accessToken = options.accessToken;
+    this.initialAccessToken = options.accessToken;
+    this.username = options.username;
+    this.password = options.password;
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
@@ -291,6 +300,7 @@ export class WildDuckClient {
   }
 
   async openUpdatesStream(userId: string, lastEventId?: string, signal?: AbortSignal): Promise<Response> {
+    await this.ensureAuth();
     const response = await this.fetchImpl(this.createUpdatesUrl(userId, lastEventId), {
       method: "GET",
       headers: {
@@ -312,11 +322,51 @@ export class WildDuckClient {
     return this.request("POST", `/users/${encodeURIComponent(userId)}/submit`, { body });
   }
 
+  private async ensureAuth(): Promise<void> {
+    if (!this.username || !this.password) return;
+    if (this.accessToken !== this.initialAccessToken) return; // already have user token
+    if (this.authPromise) {
+      await this.authPromise;
+      return;
+    }
+    this.authPromise = this.doAuth();
+    await this.authPromise;
+  }
+
+  private async doAuth(): Promise<string> {
+    const response = await this.fetchImpl(`${this.apiUrl}/authenticate`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-access-token": this.initialAccessToken,
+      },
+      body: JSON.stringify({ username: this.username, password: this.password, token: true }),
+    });
+
+    if (!response.ok) {
+      let details: unknown;
+      try {
+        details = await response.json();
+      } catch {
+        details = await response.text();
+      }
+      throw new WildDuckApiError(response.status, details);
+    }
+
+    const data = (await response.json()) as { token?: string };
+    if (!data.token) {
+      throw new Error("WildDuck authenticate response did not include a token.");
+    }
+    this.accessToken = data.token;
+    return data.token;
+  }
+
   private async request(
     method: string,
     path: string,
     options: { query?: Record<string, unknown>; body?: unknown } = {},
   ): Promise<unknown> {
+    await this.ensureAuth();
     const response = await this.rawRequest(method, path, options);
 
     const contentType = response.headers.get("content-type") ?? "";
