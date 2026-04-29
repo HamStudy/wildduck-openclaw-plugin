@@ -16,7 +16,7 @@ type Runtime = {
 type ToolSpec = Omit<AnyAgentTool, "label" | "execute"> & {
   label?: string;
   optional?: boolean;
-  execute: AnyAgentTool["execute"];
+  execute: (id: string, params: any) => ReturnType<AnyAgentTool["execute"]>;
 };
 
 const AddressSchema = Type.Object(
