@@ -12,10 +12,11 @@ OpenClaw native plugin for WildDuck email through the WildDuck REST API.
 - Draft creation separate from sending
 - Explicit permission groups for send, mutate, filters, admin, and watch
 - Debounced update-event buffer using WildDuck `/users/:user/updates` SSE, with polling fallback
+- **Multi-account support** — configure multiple WildDuck users on the same server with per-account permissions and credentials
 
 ## Configuration
 
-Prefer environment variables or OpenClaw SecretRefs for credentials.
+### Single-account (legacy)
 
 ```jsonc
 {
@@ -35,7 +36,52 @@ Prefer environment variables or OpenClaw SecretRefs for credentials.
 }
 ```
 
-Permission groups:
+### Multi-account
+
+Configure multiple WildDuck users with per-account permissions. Global settings are inherited as defaults.
+
+```jsonc
+{
+  "plugins": {
+    "entries": {
+      "wildduck": {
+        "enabled": true,
+        "config": {
+          "apiUrl": "https://mail.example.com",
+          "accessTokenEnv": "WILDDUCK_ACCESS_TOKEN",
+          "defaultAccount": "richard",
+          "permissions": ["read"],
+          "accounts": {
+            "richard": {
+              "userId": "richard@hamstudy.org",
+              "permissions": ["read", "send", "mutate"]
+            },
+            "taxbot": {
+              "userId": "taxbot@hamstudy.org",
+              "permissions": ["read"]
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Each account can also override `apiUrl`, `accessToken`, and `watch` settings if needed.
+
+### Tool usage with accounts
+
+All tools accept an optional `account` parameter. When omitted, the plugin uses `defaultAccount` if configured, otherwise falls back to legacy global `defaultUserId`.
+
+```
+wildduck_search_messages({ account: "richard", q: "from:invoice@example.com" })
+wildduck_send_message({ account: "richard", to: [...], subject: "Hello" })
+```
+
+Permission checks are enforced per-account. An account with only `["read"]` cannot call send or mutate tools even if the global config allows them.
+
+### Permission groups
 
 - `read`: list, search, read, and inspect thread context
 - `draft`: save composed drafts on the server

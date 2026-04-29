@@ -17,6 +17,15 @@ export type WatchConfig = {
   maxBufferedEvents?: number;
 };
 
+export type AccountConfig = {
+  userId: string;
+  permissions?: Permission[];
+  apiUrl?: string;
+  accessToken?: SecretInput;
+  accessTokenEnv?: string;
+  watch?: WatchConfig;
+};
+
 export type PluginConfig = {
   apiUrl?: string;
   accessToken?: SecretInput;
@@ -24,6 +33,17 @@ export type PluginConfig = {
   defaultUserId?: string;
   permissions?: Permission[];
   watch?: WatchConfig;
+  // Multi-account support
+  defaultAccount?: string;
+  accounts?: Record<string, AccountConfig>;
+};
+
+export type ResolvedAccount = {
+  userId: string;
+  permissions: Set<Permission>;
+  apiUrl: string;
+  accessToken: string;
+  watch: Required<Omit<WatchConfig, "users">> & { users: string[] };
 };
 
 export type ResolvedConfig = {
@@ -32,6 +52,8 @@ export type ResolvedConfig = {
   defaultUserId?: string;
   permissions: Set<Permission>;
   watch: Required<Omit<WatchConfig, "users">> & { users: string[] };
+  defaultAccount?: string;
+  accounts: Map<string, ResolvedAccount>;
 };
 
 export type Address = {

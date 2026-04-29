@@ -1,8 +1,8 @@
 {
   "id": "wildduck",
   "name": "WildDuck",
-  "description": "Adds permissioned WildDuck REST email tools, thread-aware search, drafts, and debounced update events to OpenClaw.",
-  "version": "0.1.0",
+  "description": "Adds permissioned WildDuck REST email tools, thread-aware search, drafts, and debounced update events to OpenClaw. Supports multi-account configuration for shared servers.",
+  "version": "0.2.0",
   "skills": [
     "skills/wildduck-email"
   ],
@@ -12,10 +12,10 @@
     "properties": {
       "apiUrl": {
         "type": "string",
-        "description": "WildDuck API base URL, without trailing slash."
+        "description": "WildDuck API base URL, without trailing slash. Used as default for all accounts."
       },
       "accessToken": {
-        "description": "WildDuck access token or SecretRef. Prefer env SecretRefs or accessTokenEnv over plaintext.",
+        "description": "WildDuck access token or SecretRef. Used as default for all accounts.",
         "oneOf": [
           {
             "type": "string"
@@ -54,7 +54,11 @@
       },
       "defaultUserId": {
         "type": "string",
-        "description": "Default WildDuck user id for tools when userId is omitted."
+        "description": "Default WildDuck user id for tools when userId is omitted and no account is configured."
+      },
+      "defaultAccount": {
+        "type": "string",
+        "description": "Default account id to use when account parameter is omitted."
       },
       "permissions": {
         "type": "array",
@@ -73,7 +77,7 @@
             "watch"
           ]
         },
-        "description": "Enabled capability groups. Defaults to read-only."
+        "description": "Enabled capability groups for global/legacy config. Defaults to read-only."
       },
       "watch": {
         "type": "object",
@@ -111,6 +115,114 @@
             "default": 200
           }
         }
+      },
+      "accounts": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "userId"
+          ],
+          "properties": {
+            "userId": {
+              "type": "string",
+              "description": "WildDuck user id for this account."
+            },
+            "permissions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "read",
+                  "draft",
+                  "send",
+                  "mutate",
+                  "filters",
+                  "admin",
+                  "watch"
+                ]
+              },
+              "description": "Permissions for this account. Inherits global permissions when omitted."
+            },
+            "apiUrl": {
+              "type": "string",
+              "description": "Override API URL for this account."
+            },
+            "accessToken": {
+              "description": "Override access token for this account.",
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "source",
+                    "id"
+                  ],
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "env",
+                        "file",
+                        "exec"
+                      ]
+                    },
+                    "provider": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            },
+            "accessTokenEnv": {
+              "type": "string",
+              "description": "Environment variable for this account's access token."
+            },
+            "watch": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "sse",
+                    "poll"
+                  ],
+                  "default": "sse"
+                },
+                "users": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "debounceMs": {
+                  "type": "number",
+                  "default": 90000
+                },
+                "pollIntervalMs": {
+                  "type": "number",
+                  "default": 60000
+                },
+                "maxBufferedEvents": {
+                  "type": "number",
+                  "default": 200
+                }
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -129,8 +241,14 @@
     "defaultUserId": {
       "label": "Default user id"
     },
+    "defaultAccount": {
+      "label": "Default account id"
+    },
     "permissions": {
       "label": "Enabled permissions"
+    },
+    "accounts": {
+      "label": "Per-account configuration"
     }
   }
 }

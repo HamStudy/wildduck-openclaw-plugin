@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveConfig, resolveUserId } from "./config.js";
+import { resolveConfig, resolveUserId, resolveAccount, resolveEffectiveAccount } from "./config.js";
 import { hasPermission, requirePermission } from "./permissions.js";
 import { buildCorrespondenceQuery } from "./query.js";
 import type { Permission, PluginConfig, ResolvedConfig } from "./types.js";
@@ -10,7 +10,7 @@ import { WildDuckUpdateWatcher } from "./watcher.js";
 
 type Runtime = {
   config: ResolvedConfig;
-  client: WildDuckClient;
+  getClient(accountId?: string): WildDuckClient;
 };
 
 type ToolSpec = Omit<AnyAgentTool, "label" | "execute"> & {
@@ -38,7 +38,8 @@ const AttachmentSchema = Type.Object(
 );
 
 const UserParam = {
-  userId: Type.Optional(Type.String({ description: "WildDuck user id. Uses configured defaultUserId when omitted." })),
+  userId: Type.Optional(Type.String({ description: "WildDuck user id. Uses configured account default or defaultUserId when omitted." })),
+  account: Type.Optional(Type.String({ description: "Configured account id. Uses defaultAccount when omitted." })),
 };
 
 const SearchParams = Type.Object(
@@ -118,14 +119,34 @@ export default definePluginEntry({
     const rawConfig = (api.pluginConfig ?? {}) as PluginConfig;
     const logger = api.logger;
     const declaredPermissions = new Set(rawConfig.permissions?.length ? rawConfig.permissions : (["read"] as Permission[]));
-    let watcher: WildDuckUpdateWatcher | undefined;
+    const watchers = new Map<string, WildDuckUpdateWatcher>();
     let startupError: string | undefined;
 
     try {
       const runtime = createRuntime(rawConfig);
-      if (hasPermission(runtime.config, "watch") && runtime.config.watch.enabled) {
-        watcher = new WildDuckUpdateWatcher(runtime.client, runtime.config, logger ?? console);
+      
+      // Start watchers for each account with watch enabled
+      for (const [accountId, account] of runtime.config.accounts) {
+        if (hasPermission(runtime.config, "watch", accountId) && account.watch.enabled && account.watch.users.length) {
+          const watcher = new WildDuckUpdateWatcher(
+            runtime.getClient(accountId),
+            account.watch,
+            logger ?? console,
+          );
+          watcher.start();
+          watchers.set(accountId, watcher);
+        }
+      }
+      
+      // Legacy: if no accounts, use global watch config
+      if (runtime.config.accounts.size === 0 && hasPermission(runtime.config, "watch") && runtime.config.watch.enabled && runtime.config.watch.users.length) {
+        const watcher = new WildDuckUpdateWatcher(
+          runtime.getClient(),
+          runtime.config.watch,
+          logger ?? console,
+        );
         watcher.start();
+        watchers.set("__global__", watcher);
       }
     } catch (err) {
       startupError = formatError(err);
@@ -139,16 +160,30 @@ export default definePluginEntry({
       async execute() {
         try {
           const runtime = createRuntime(rawConfig);
+          const accountSummaries: Record<string, unknown> = {};
+          for (const [accountId, account] of runtime.config.accounts) {
+            accountSummaries[accountId] = {
+              userId: account.userId,
+              permissions: Array.from(account.permissions).sort(),
+              apiUrl: account.apiUrl,
+              watch: {
+                enabled: account.watch.enabled,
+                mode: account.watch.mode,
+                users: account.watch.users.length,
+              },
+            };
+          }
           return textResult({
             configured: true,
             apiUrl: runtime.config.apiUrl,
             defaultUserId: runtime.config.defaultUserId ?? null,
+            defaultAccount: runtime.config.defaultAccount ?? null,
             permissions: Array.from(runtime.config.permissions).sort(),
-            watch: {
-              enabled: runtime.config.watch.enabled,
-              mode: runtime.config.watch.mode,
-              users: runtime.config.watch.users.length,
-              bufferedEvents: watcher?.getEvents(10).length ?? 0,
+            accounts: accountSummaries,
+            watchers: {
+              active: watchers.size,
+              accounts: Array.from(watchers.keys()),
+              bufferedEvents: Array.from(watchers.entries()).map(([id, w]) => ({ account: id, events: w.getEvents(10).length })),
             },
           });
         } catch (err) {
@@ -169,8 +204,9 @@ export default definePluginEntry({
       ),
       async execute(_id, params) {
         const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "read");
-        return textResult(await runtime.client.listMailboxes(resolveUserId(runtime.config, params.userId), params.includeCounters ?? true));
+        const accountId = params.account;
+        requirePermission(runtime.config, "read", accountId);
+        return textResult(await runtime.getClient(accountId).listMailboxes(resolveUserId(runtime.config, accountId, params.userId), params.includeCounters ?? true));
       },
     });
 
@@ -194,11 +230,12 @@ export default definePluginEntry({
       ),
       async execute(_id, params) {
         const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "read");
+        const accountId = params.account;
+        requirePermission(runtime.config, "read", accountId);
         return textResult(
-          await runtime.client.listMessages({
+          await runtime.getClient(accountId).listMessages({
             ...params,
-            userId: resolveUserId(runtime.config, params.userId),
+            userId: resolveUserId(runtime.config, accountId, params.userId),
           }),
         );
       },
@@ -211,11 +248,12 @@ export default definePluginEntry({
       parameters: SearchParams,
       async execute(_id, params) {
         const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "read");
+        const accountId = params.account;
+        requirePermission(runtime.config, "read", accountId);
         return textResult(
-          await runtime.client.searchMessages({
+          await runtime.getClient(accountId).searchMessages({
             ...params,
-            userId: resolveUserId(runtime.config, params.userId),
+            userId: resolveUserId(runtime.config, accountId, params.userId),
             threadCounters: params.threadCounters ?? true,
             searchable: params.searchable ?? true,
           }),
@@ -237,10 +275,11 @@ export default definePluginEntry({
       ),
       async execute(_id, params) {
         const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "read");
+        const accountId = params.account;
+        requirePermission(runtime.config, "read", accountId);
         return textResult(
-          await runtime.client.searchMessages({
-            userId: resolveUserId(runtime.config, params.userId),
+          await runtime.getClient(accountId).searchMessages({
+            userId: resolveUserId(runtime.config, accountId, params.userId),
             q: buildCorrespondenceQuery(params.address, params.mailbox),
             limit: params.limit ?? 50,
             searchable: true,
@@ -265,11 +304,12 @@ export default definePluginEntry({
       ),
       async execute(_id, params) {
         const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, params.markAsSeen ? "mutate" : "read");
+        const accountId = params.account;
+        requirePermission(runtime.config, params.markAsSeen ? "mutate" : "read", accountId);
         return textResult(
-          await runtime.client.getMessage({
+          await runtime.getClient(accountId).getMessage({
             ...params,
-            userId: resolveUserId(runtime.config, params.userId),
+            userId: resolveUserId(runtime.config, accountId, params.userId),
             markAsSeen: params.markAsSeen ?? false,
           }),
         );
@@ -291,113 +331,39 @@ export default definePluginEntry({
       ),
       async execute(_id, params) {
         const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "read");
+        const accountId = params.account;
+        requirePermission(runtime.config, "read", accountId);
         return textResult(
-          await runtime.client.getAttachment({
+          await runtime.getClient(accountId).getAttachment({
             ...params,
-            userId: resolveUserId(runtime.config, params.userId),
+            userId: resolveUserId(runtime.config, accountId, params.userId),
           }),
         );
       },
     });
 
     registerIf(api, declaredPermissions, "read", {
-      name: "wildduck_list_addresses",
-      description: "List sending addresses/identities for a user. Use before drafting or sending when From identity matters. Read-only.",
-      parameters: Type.Object(UserParam, { additionalProperties: false }),
-      async execute(_id, params) {
-        const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "read");
-        return textResult(await runtime.client.listAddresses(resolveUserId(runtime.config, params.userId)));
-      },
-    });
-
-    registerIf(api, declaredPermissions, "read", {
-      name: "wildduck_get_autoreply",
-      description: "Get autoreply/vacation-response settings for a user. Read-only.",
-      parameters: Type.Object(UserParam, { additionalProperties: false }),
-      async execute(_id, params) {
-        const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "read");
-        return textResult(await runtime.client.getAutoreply(resolveUserId(runtime.config, params.userId)));
-      },
-    });
-
-    registerIf(api, declaredPermissions, "read", {
       name: "wildduck_get_thread",
-      description:
-        "Fetch full conversation context by thread id, or by first fetching a message to discover its thread. Read-only and should be used before drafting replies.",
+      description: "Get thread messages by thread id (returns message list). Read-only.",
       parameters: Type.Object(
         {
           ...UserParam,
-          thread: Type.Optional(Type.String()),
-          mailbox: Type.Optional(Type.String()),
-          message: Type.Optional(Type.Union([Type.String(), Type.Number()])),
-          includeBodies: Type.Optional(Type.Boolean({ default: true })),
+          thread: Type.String(),
           limit: Type.Optional(Type.Number({ minimum: 1, maximum: 250 })),
         },
         { additionalProperties: false },
       ),
       async execute(_id, params) {
         const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "read");
-        const userId = resolveUserId(runtime.config, params.userId);
-        if (params.thread) {
-          return textResult(await runtime.client.getThread({ userId, thread: params.thread, includeBodies: params.includeBodies ?? true, limit: params.limit }));
-        }
-        if (!params.mailbox || params.message === undefined) {
-          throw new Error("Pass either thread, or both mailbox and message.");
-        }
+        const accountId = params.account;
+        requirePermission(runtime.config, "read", accountId);
         return textResult(
-          await runtime.client.getThreadForMessage({
-            userId,
-            mailbox: params.mailbox,
-            message: params.message,
-            includeBodies: params.includeBodies ?? true,
-            limit: params.limit,
-            markAsSeen: false,
-          }),
-        );
-      },
-    });
-
-    registerIf(api, declaredPermissions, "mutate", {
-      name: "wildduck_update_autoreply",
-      description: "Update autoreply/vacation-response settings. Requires mutate permission.",
-      parameters: Type.Object(
-        {
-          ...UserParam,
-          status: Type.Optional(Type.Boolean()),
-          name: Type.Optional(Type.String()),
-          subject: Type.Optional(Type.String()),
-          text: Type.Optional(Type.String()),
-          start: Type.Optional(Type.String()),
-          end: Type.Optional(Type.String()),
-        },
-        { additionalProperties: false },
-      ),
-      optional: true,
-      async execute(_id, params) {
-        const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "mutate");
-        const { userId: explicitUserId, ...body } = params;
-        return textResult(await runtime.client.updateAutoreply(resolveUserId(runtime.config, explicitUserId), body));
-      },
-    });
-
-    registerIf(api, declaredPermissions, "draft", {
-      name: "wildduck_create_draft",
-      description:
-        "Compose or update a draft on the WildDuck server without sending it. Requires draft permission and never sends mail.",
-      parameters: SubmitParams,
-      optional: true,
-      async execute(_id, params) {
-        const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "draft");
-        return textResult(
-          await runtime.client.createDraft({
-            ...params,
-            userId: resolveUserId(runtime.config, params.userId),
+          await runtime.getClient(accountId).searchMessages({
+            userId: resolveUserId(runtime.config, accountId, params.userId),
+            thread: params.thread,
+            limit: params.limit ?? 50,
+            searchable: true,
+            threadCounters: true,
           }),
         );
       },
@@ -405,24 +371,33 @@ export default definePluginEntry({
 
     registerIf(api, declaredPermissions, "send", {
       name: "wildduck_send_message",
-      description: "Send an email through WildDuck. Requires send permission. Use wildduck_create_draft when approval is needed.",
+      description: "Send a WildDuck message (create draft + submit). Requires send permission.",
       parameters: SubmitParams,
-      optional: true,
       async execute(_id, params) {
         const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "send");
-        return textResult(
-          await runtime.client.sendMessage({
-            ...params,
-            userId: resolveUserId(runtime.config, params.userId),
-          }),
-        );
+        const accountId = params.account;
+        requirePermission(runtime.config, "send", accountId);
+        const userId = resolveUserId(runtime.config, accountId, params.userId);
+        return textResult(await runtime.getClient(accountId).sendMessage({ ...params, userId }));
+      },
+    });
+
+    registerIf(api, declaredPermissions, "draft", {
+      name: "wildduck_create_draft",
+      description: "Create a WildDuck draft message. Requires draft permission.",
+      parameters: SubmitParams,
+      async execute(_id, params) {
+        const runtime = createRuntime(rawConfig);
+        const accountId = params.account;
+        requirePermission(runtime.config, "draft", accountId);
+        const userId = resolveUserId(runtime.config, accountId, params.userId);
+        return textResult(await runtime.getClient(accountId).createDraft({ ...params, userId }));
       },
     });
 
     registerIf(api, declaredPermissions, "mutate", {
       name: "wildduck_update_message",
-      description: "Update message flags or metadata. Requires mutate permission.",
+      description: "Update flags on a WildDuck message. Requires mutate permission.",
       parameters: Type.Object(
         {
           ...UserParam,
@@ -431,18 +406,22 @@ export default definePluginEntry({
           seen: Type.Optional(Type.Boolean()),
           flagged: Type.Optional(Type.Boolean()),
           deleted: Type.Optional(Type.Boolean()),
-          metaData: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
         },
         { additionalProperties: false },
       ),
-      optional: true,
       async execute(_id, params) {
         const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "mutate");
+        const accountId = params.account;
+        requirePermission(runtime.config, "mutate", accountId);
+        const userId = resolveUserId(runtime.config, accountId, params.userId);
         return textResult(
-          await runtime.client.updateMessage({
-            ...params,
-            userId: resolveUserId(runtime.config, params.userId),
+          await runtime.getClient(accountId).updateMessage({
+            userId,
+            mailbox: params.mailbox,
+            message: params.message,
+            seen: params.seen,
+            flagged: params.flagged,
+            deleted: params.deleted,
           }),
         );
       },
@@ -450,32 +429,28 @@ export default definePluginEntry({
 
     registerIf(api, declaredPermissions, "mutate", {
       name: "wildduck_move_message",
-      description: "Move a message to another mailbox. Requires mutate permission.",
+      description: "Move a WildDuck message to another mailbox. Requires mutate permission.",
       parameters: Type.Object(
         {
           ...UserParam,
           mailbox: Type.String(),
           message: Type.Union([Type.String(), Type.Number()]),
-          target: Type.String({ description: "Target mailbox id." }),
+          target: Type.String(),
         },
         { additionalProperties: false },
       ),
-      optional: true,
       async execute(_id, params) {
         const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "mutate");
-        return textResult(
-          await runtime.client.moveMessage({
-            ...params,
-            userId: resolveUserId(runtime.config, params.userId),
-          }),
-        );
+        const accountId = params.account;
+        requirePermission(runtime.config, "mutate", accountId);
+        const userId = resolveUserId(runtime.config, accountId, params.userId);
+        return textResult(await runtime.getClient(accountId).moveMessage({ userId, mailbox: params.mailbox, message: params.message, target: params.target }));
       },
     });
 
     registerIf(api, declaredPermissions, "mutate", {
       name: "wildduck_delete_message",
-      description: "Delete a message. Requires mutate permission.",
+      description: "Delete a WildDuck message. Requires mutate permission.",
       parameters: Type.Object(
         {
           ...UserParam,
@@ -484,28 +459,36 @@ export default definePluginEntry({
         },
         { additionalProperties: false },
       ),
-      optional: true,
       async execute(_id, params) {
         const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "mutate");
-        return textResult(
-          await runtime.client.deleteMessage({
-            ...params,
-            userId: resolveUserId(runtime.config, params.userId),
-          }),
-        );
+        const accountId = params.account;
+        requirePermission(runtime.config, "mutate", accountId);
+        return textResult(await runtime.getClient(accountId).deleteMessage({ userId: resolveUserId(runtime.config, accountId, params.userId), mailbox: params.mailbox, message: params.message }));
       },
     });
 
-    registerIf(api, declaredPermissions, "filters", {
-      name: "wildduck_list_filters",
-      description: "List WildDuck filters for a user. Requires filters permission.",
-      parameters: Type.Object(UserParam, { additionalProperties: false }),
-      optional: true,
+    registerIf(api, declaredPermissions, "mutate", {
+      name: "wildduck_move_messages",
+      description: "Move multiple WildDuck messages to another mailbox. Requires mutate permission.",
+      parameters: Type.Object(
+        {
+          ...UserParam,
+          source: Type.String(),
+          target: Type.String(),
+          messages: Type.Array(Type.Union([Type.String(), Type.Number()])),
+        },
+        { additionalProperties: false },
+      ),
       async execute(_id, params) {
         const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "filters");
-        return textResult(await runtime.client.listFilters(resolveUserId(runtime.config, params.userId)));
+        const accountId = params.account;
+        requirePermission(runtime.config, "mutate", accountId);
+        const userId = resolveUserId(runtime.config, accountId, params.userId);
+        const results = [];
+        for (const message of params.messages) {
+          results.push(await runtime.getClient(accountId).moveMessage({ userId, mailbox: params.source, message, target: params.target }));
+        }
+        return textResult({ moved: results.length, results });
       },
     });
 
@@ -520,17 +503,28 @@ export default definePluginEntry({
         },
         { additionalProperties: false },
       ),
-      optional: true,
       async execute(_id, params) {
         const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "filters");
-        return textResult(
-          await runtime.client.createFilter({
-            userId: resolveUserId(runtime.config, params.userId),
-            query: params.query,
-            action: params.action,
-          }),
-        );
+        const accountId = params.account;
+        requirePermission(runtime.config, "filters", accountId);
+        return textResult(await runtime.getClient(accountId).createFilter({ userId: resolveUserId(runtime.config, accountId, params.userId), query: params.query, action: params.action }));
+      },
+    });
+
+    registerIf(api, declaredPermissions, "filters", {
+      name: "wildduck_list_filters",
+      description: "List WildDuck mail filters. Requires filters permission.",
+      parameters: Type.Object(
+        {
+          ...UserParam,
+        },
+        { additionalProperties: false },
+      ),
+      async execute(_id, params) {
+        const runtime = createRuntime(rawConfig);
+        const accountId = params.account;
+        requirePermission(runtime.config, "filters", accountId);
+        return textResult(await runtime.getClient(accountId).listFilters(resolveUserId(runtime.config, accountId, params.userId)));
       },
     });
 
@@ -549,10 +543,11 @@ export default definePluginEntry({
       optional: true,
       async execute(_id, params) {
         const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "filters");
+        const accountId = params.account;
+        requirePermission(runtime.config, "filters", accountId);
         return textResult(
-          await runtime.client.updateFilter({
-            userId: resolveUserId(runtime.config, params.userId),
+          await runtime.getClient(accountId).updateFilter({
+            userId: resolveUserId(runtime.config, accountId, params.userId),
             filter: params.filter,
             query: params.query,
             action: params.action,
@@ -574,36 +569,59 @@ export default definePluginEntry({
       optional: true,
       async execute(_id, params) {
         const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "filters");
-        return textResult(await runtime.client.deleteFilter(resolveUserId(runtime.config, params.userId), params.filter));
+        const accountId = params.account;
+        requirePermission(runtime.config, "filters", accountId);
+        return textResult(await runtime.getClient(accountId).deleteFilter(resolveUserId(runtime.config, accountId, params.userId), params.filter));
       },
     });
 
     registerIf(api, declaredPermissions, "watch", {
       name: "wildduck_get_events",
-      description: "Read debounced WildDuck update events buffered by the plugin watcher. Requires watch permission.",
+      description: "Read debounced WildDuck update events buffered by the plugin watcher. Requires watch permission. Optionally scoped to an account.",
       parameters: Type.Object(
         {
+          account: Type.Optional(Type.String({ description: "Account id. When omitted, returns events from all active watchers." })),
           limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200 })),
         },
         { additionalProperties: false },
       ),
       async execute(_id, params) {
         const runtime = createRuntime(rawConfig);
-        requirePermission(runtime.config, "watch");
-        return textResult({ events: watcher?.getEvents(params.limit ?? 50) ?? [] });
+        const accountId = params.account;
+        requirePermission(runtime.config, "watch", accountId);
+        
+        if (accountId) {
+          const watcher = watchers.get(accountId);
+          return textResult({ events: watcher?.getEvents(params.limit ?? 50) ?? [] });
+        }
+        
+        // Return events from all watchers
+        const allEvents: unknown[] = [];
+        for (const [id, watcher] of watchers) {
+          allEvents.push(...watcher.getEvents(params.limit ?? 50).map(e => ({ ...e, account: id === "__global__" ? undefined : id })));
+        }
+        return textResult({ events: allEvents });
       },
     });
 
     registerIf(api, declaredPermissions, "watch", {
       name: "wildduck_clear_events",
-      description: "Clear debounced WildDuck update events buffered by the plugin watcher. Requires watch permission.",
-      parameters: Type.Object({}, { additionalProperties: false }),
+      description: "Clear debounced WildDuck update events buffered by the plugin watcher. Requires watch permission. Optionally scoped to an account.",
+      parameters: Type.Object(
+        {
+          account: Type.Optional(Type.String({ description: "Account id. When omitted, clears events from all active watchers." })),
+        },
+        { additionalProperties: false },
+      ),
       optional: true,
       async execute() {
         const runtime = createRuntime(rawConfig);
         requirePermission(runtime.config, "watch");
-        return textResult(watcher?.clearEvents() ?? { cleared: 0 });
+        let cleared = 0;
+        for (const watcher of watchers.values()) {
+          cleared += watcher.clearEvents().cleared;
+        }
+        return textResult({ cleared });
       },
     });
   },
@@ -611,13 +629,22 @@ export default definePluginEntry({
 
 function createRuntime(rawConfig: PluginConfig): Runtime {
   const config = resolveConfig(rawConfig);
-  return {
-    config,
-    client: new WildDuckClient({
-      apiUrl: config.apiUrl,
-      accessToken: config.accessToken,
-    }),
-  };
+  const clients = new Map<string, WildDuckClient>();
+  
+  function getClient(accountId?: string): WildDuckClient {
+    const { account } = resolveEffectiveAccount(config, accountId);
+    const cacheKey = accountId ?? "__global__";
+    
+    if (!clients.has(cacheKey)) {
+      clients.set(cacheKey, new WildDuckClient({
+        apiUrl: account?.apiUrl ?? config.apiUrl,
+        accessToken: account?.accessToken ?? config.accessToken,
+      }));
+    }
+    return clients.get(cacheKey)!;
+  }
+  
+  return { config, getClient };
 }
 
 function registerIf(api: OpenClawPluginApi, permissions: Set<Permission>, permission: Permission, tool: ToolSpec): void {
@@ -654,7 +681,7 @@ function redactSecrets(value: unknown): unknown {
   }
   const result: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
-    if (/token|password|secret/i.test(key)) {
+    if (/token|password|secret|accessToken/i.test(key)) {
       result[key] = "[redacted]";
     } else {
       result[key] = redactSecrets(entry);

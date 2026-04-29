@@ -20,22 +20,22 @@ export class WildDuckUpdateWatcher {
 
   constructor(
     private readonly client: WildDuckClient,
-    private readonly config: ResolvedConfig,
+    private readonly watch: ResolvedConfig["watch"],
     private readonly logger: Logger = {},
   ) {}
 
   start(): void {
-    if (this.started || !this.config.watch.enabled || !this.config.watch.users.length) {
+    if (this.started || !this.watch.enabled || !this.watch.users.length) {
       return;
     }
 
     this.started = true;
-    if (this.config.watch.mode === "poll") {
+    if (this.watch.mode === "poll") {
       this.startPolling();
       return;
     }
 
-    for (const userId of this.config.watch.users) {
+    for (const userId of this.watch.users) {
       this.startSseLoop(userId);
     }
   }
@@ -99,7 +99,7 @@ export class WildDuckUpdateWatcher {
     }
     this.timers.set(
       key,
-      setTimeout(() => this.flush(key), this.config.watch.debounceMs),
+      setTimeout(() => this.flush(key), this.watch.debounceMs),
     );
   }
 
@@ -120,7 +120,7 @@ export class WildDuckUpdateWatcher {
       ...event,
     });
 
-    const overflow = this.events.length - this.config.watch.maxBufferedEvents;
+    const overflow = this.events.length - this.watch.maxBufferedEvents;
     if (overflow > 0) {
       this.events.splice(0, overflow);
     }
@@ -131,7 +131,7 @@ export class WildDuckUpdateWatcher {
       if (!this.started) {
         return;
       }
-      for (const userId of this.config.watch.users) {
+      for (const userId of this.watch.users) {
         try {
           const result = await this.client.searchMessages({
             userId,
@@ -148,10 +148,10 @@ export class WildDuckUpdateWatcher {
           this.logger.warn?.("WildDuck poll watcher failed", err);
         }
       }
-      this.pollTimer = setTimeout(poll, this.config.watch.pollIntervalMs);
+      this.pollTimer = setTimeout(poll, this.watch.pollIntervalMs);
     };
 
-    this.pollTimer = setTimeout(poll, 0);
+    this.pollTimer = setTimeout(poll, this.watch.pollIntervalMs);
   }
 
   private async startSseLoop(userId: string): Promise<void> {
