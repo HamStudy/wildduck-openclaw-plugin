@@ -196,12 +196,16 @@ export class WildDuckClient {
     });
   }
 
-  async createDraft(input: SubmitMessageInput & { userId: string }): Promise<unknown> {
-    return this.submitMessage(input.userId, {
+  async createDraft(input: SubmitMessageInput & { userId: string; mailbox: string }): Promise<unknown> {
+    const body = {
       ...buildSubmitBody(input),
-      isDraft: true,
-      uploadOnly: true,
-    });
+      draft: true,
+    };
+    return this.request(
+      "POST",
+      `/users/${encodeURIComponent(input.userId)}/mailboxes/${encodeURIComponent(input.mailbox)}/messages`,
+      { body },
+    );
   }
 
   async sendMessage(input: SubmitMessageInput & { userId: string }): Promise<unknown> {
@@ -334,7 +338,11 @@ export class WildDuckClient {
   }
 
   private async doAuth(): Promise<string> {
-    const response = await this.fetchImpl(`${this.apiUrl}/authenticate`, {
+    const url = `${this.apiUrl}/authenticate`;
+    if (!this.apiUrl) {
+      throw new Error(`[wildduck] apiUrl is empty or undefined. Cannot authenticate.`);
+    }
+    const response = await this.fetchImpl(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",

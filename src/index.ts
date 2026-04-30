@@ -111,6 +111,31 @@ const SubmitParams = Type.Object(
   { additionalProperties: false },
 );
 
+const DraftParams = Type.Object(
+  {
+    ...UserParam,
+    mailbox: Type.String({ description: "Mailbox id to store the draft in (typically Drafts folder id)." }),
+    to: Type.Optional(Type.Array(AddressSchema)),
+    cc: Type.Optional(Type.Array(AddressSchema)),
+    bcc: Type.Optional(Type.Array(AddressSchema)),
+    subject: Type.Optional(Type.String()),
+    text: Type.Optional(Type.String()),
+    html: Type.Optional(Type.String()),
+    attachments: Type.Optional(Type.Array(AttachmentSchema)),
+    reference: Type.Optional(
+      Type.Object(
+        {
+          mailbox: Type.String(),
+          id: Type.Union([Type.String(), Type.Number()]),
+          action: Type.Union([Type.Literal("reply"), Type.Literal("replyAll"), Type.Literal("forward")]),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 export default definePluginEntry({
   id: "wildduck",
   name: "WildDuck",
@@ -385,7 +410,7 @@ export default definePluginEntry({
     registerIf(api, declaredPermissions, "draft", {
       name: "wildduck_create_draft",
       description: "Create a WildDuck draft message. Requires draft permission.",
-      parameters: SubmitParams,
+      parameters: DraftParams,
       async execute(_id, params) {
         const runtime = createRuntime(rawConfig);
         const accountId = params.account;
